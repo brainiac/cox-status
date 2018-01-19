@@ -9,16 +9,6 @@ import os
 from requests.cookies import RequestsCookieJar
 from hsize import human2bytes
 
-USE_FIDDLER_PROXY = False
-
-if USE_FIDDLER_PROXY:
-    proxy_dict = {
-        'http': 'http://proxy:8888',
-        'https': 'https://proxy:8888'
-    }
-else:
-    proxy_dict = None
-
 
 def clean_string(string):
     string = string.replace('&#160;', ' ')
@@ -27,7 +17,7 @@ def clean_string(string):
 
 
 class CoxInternetUsage(object):
-    def __init__(self, proxy_config=None, username='', password='', server=''):
+    def __init__(self, proxy_config=None, username='', password=''):
         self._cookie_jar = None
         self._cookie_file = 'cox-status.bin'
         self._session = None
@@ -135,22 +125,15 @@ def process_data(server, data):
 
     data_details = modem_details['dataUsed']
 
-    percentage_used = int(data_details['actualPercentage']) / 100.0
     data_used = human2bytes(clean_string(data_details['totalDataUsed']))
     data_total = human2bytes(clean_string(modem_details['dataPlan']))
-
-    percentage = float(data_used) / data_total * 100
 
     records = []
     gigabytes = 1024 * 1024 * 1024
 
     data_used = float(data_used) / gigabytes
     data_total = float(data_total) / gigabytes
-    data_remaining = data_total - data_used
-
     print('monthly data used: {0} GB'.format(data_used))
-    #print 'monthly data total: {0} GB'.format(data_total)
-    #print 'percentage: %.2f' % percentage
 
     records.append('current_monthly_usage current={0},remaining={1}'
                    .format(data_used, data_total - data_used))
@@ -168,13 +151,10 @@ def process_data(server, data):
     print('{0} days remaining on current cycle'.format(time_left.days))
 
     time_into = today - service_start
-    #print '{0} days into the current cycle'.format(time_into.days)
-
     records.append('cycle_days remaining={0},current={1}'.format(time_left.days, time_into.days))
 
     # find today's usage
     daily_usage = data_details['daily']
-    #today_usage_data = daily_usage[time_into.days]
 
     # gather up all of the days up until today
     for i, daily_data in enumerate(daily_usage):
@@ -192,8 +172,9 @@ def process_data(server, data):
 
     # loop over the data and bind each measurement to a date string
     submit_data = '\n'.join(records)
-    #print(submit_data)
+
     post_to_influxdb(server, submit_data)
+    print('Server updated successfully')
 
 
 if __name__ == '__main__':
@@ -213,8 +194,7 @@ if __name__ == '__main__':
     if len(args.influxdb) == 0:
         raise RuntimeError('Missing influxdb server')
 
-    fetcher = CoxInternetUsage(proxy_dict,
-                               username=args.username,
+    fetcher = CoxInternetUsage(username=args.username,
                                password=args.password)
 
     while True:
