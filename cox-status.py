@@ -31,12 +31,15 @@ class CoxInternetUsage(object):
 
         self._create_session()
 
-    def _create_session(self):
-        try:
-            with open(self._cookie_file, 'rb') as f:
-                self._cookie_jar = pickle.load(f)
-            print('Loaded saved login session')
-        except Exception:
+    def _create_session(self, restore_cookies=True):
+        if restore_cookies:
+            try:
+                with open(self._cookie_file, 'rb') as f:
+                    self._cookie_jar = pickle.load(f)
+                print('Loaded saved login session')
+            except Exception:
+                self._cookie_jar = RequestsCookieJar()
+        else:
             self._cookie_jar = RequestsCookieJar()
 
         self._session = requests.Session()
@@ -115,66 +118,77 @@ class CoxInternetUsage(object):
 
         return response.json()
 
+    def process_data(self, server, data):
+        modem_details = data['modemDetails'][0]
+
+        # check for errors
+        error_daily = modem_details['errorDaily']
+        if error_daily is not None:
+            error_code = error_daily['errorCode']
+            error_message = error_daily['errorMessage']
+
+            # print error and reset the session
+            print('Error {0} - {1}'.format(error_code, error_message))
+            print('Clearing Session, will try again in an hour...')
+            self._create_session(False)
+            return
+
+        data_details = modem_details['dataUsed']
+
+        data_used = human2bytes(clean_string(data_details['totalDataUsed']))
+        data_total = human2bytes(clean_string(modem_details['dataPlan']))
+
+        records = []
+        gigabytes = 1024 * 1024 * 1024
+
+        data_used = float(data_used) / gigabytes
+        data_total = float(data_total) / gigabytes
+        print('monthly data used: {0} GB'.format(data_used))
+
+        records.append('current_monthly_usage current={0},remaining={1}'
+                       .format(data_used, data_total - data_used))
+        records.append('current_monthly_total value={0}'.format(data_total))
+
+        # parse the service period
+        service_period = modem_details['servicePeriod']
+        service_start, service_end = service_period.split('-')
+
+        service_start = datetime.datetime.strptime(service_start, '%m/%d/%y')
+        service_end = datetime.datetime.strptime(service_end, '%m/%d/%y')
+
+        today = datetime.datetime.now()
+        time_left = service_end - today
+        print('{0} days remaining on current cycle'.format(time_left.days))
+
+        time_into = today - service_start
+        records.append('cycle_days remaining={0},current={1}'.format(time_left.days, time_into.days))
+
+        # find today's usage
+        daily_usage = data_details['daily']
+
+        # gather up all of the days up until today
+        for i, daily_data in enumerate(daily_usage):
+            date_point = service_start + datetime.timedelta(days=i)
+            if date_point > today:
+                break
+
+            data_measurement = int(daily_data['data'])
+            records.append('daily_usage,date={0} value={1}'.format(date_point.date(), data_measurement))
+
+        last_update_date = modem_details['lastUpdatedDate']
+        last_update_date = datetime.datetime.strptime(last_update_date, '%m/%d/%y')
+        last_update_date = last_update_date.strftime('%m/%d/%Y')
+        records.append('last_update value="{0}"'.format(last_update_date))
+
+        # loop over the data and bind each measurement to a date string
+        submit_data = '\n'.join(records)
+
+        post_to_influxdb(server, submit_data)
+        print('Server updated successfully')
+
 
 def post_to_influxdb(server, data):
     requests.post(server, data=data)
-
-
-def process_data(server, data):
-    modem_details = data['modemDetails'][0]
-
-    data_details = modem_details['dataUsed']
-
-    data_used = human2bytes(clean_string(data_details['totalDataUsed']))
-    data_total = human2bytes(clean_string(modem_details['dataPlan']))
-
-    records = []
-    gigabytes = 1024 * 1024 * 1024
-
-    data_used = float(data_used) / gigabytes
-    data_total = float(data_total) / gigabytes
-    print('monthly data used: {0} GB'.format(data_used))
-
-    records.append('current_monthly_usage current={0},remaining={1}'
-                   .format(data_used, data_total - data_used))
-    records.append('current_monthly_total value={0}'.format(data_total))
-
-    # parse the service period
-    service_period = modem_details['servicePeriod']
-    service_start, service_end = service_period.split('-')
-
-    service_start = datetime.datetime.strptime(service_start, '%m/%d/%y')
-    service_end = datetime.datetime.strptime(service_end, '%m/%d/%y')
-
-    today = datetime.datetime.now()
-    time_left = service_end - today
-    print('{0} days remaining on current cycle'.format(time_left.days))
-
-    time_into = today - service_start
-    records.append('cycle_days remaining={0},current={1}'.format(time_left.days, time_into.days))
-
-    # find today's usage
-    daily_usage = data_details['daily']
-
-    # gather up all of the days up until today
-    for i, daily_data in enumerate(daily_usage):
-        date_point = service_start + datetime.timedelta(days=i)
-        if date_point > today:
-            break
-
-        data_measurement = int(daily_data['data'])
-        records.append('daily_usage,date={0} value={1}'.format(date_point.date(), data_measurement))
-
-    last_update_date = modem_details['lastUpdatedDate']
-    last_update_date = datetime.datetime.strptime(last_update_date, '%m/%d/%y')
-    last_update_date = last_update_date.strftime('%m/%d/%Y')
-    records.append('last_update value="{0}"'.format(last_update_date))
-
-    # loop over the data and bind each measurement to a date string
-    submit_data = '\n'.join(records)
-
-    post_to_influxdb(server, submit_data)
-    print('Server updated successfully')
 
 
 if __name__ == '__main__':
@@ -201,7 +215,7 @@ if __name__ == '__main__':
         try:
             print('Fetching usage from cox.com:')
             data = fetcher.get_usage_data()
-            process_data(args.influxdb, data)
+            fetcher.process_data(args.influxdb, data)
             # sleep for an hour
             time.sleep(60 * 60)
         except Exception as e:
