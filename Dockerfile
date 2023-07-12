@@ -1,12 +1,10 @@
-from python:3
+from python:3.11
 
 MAINTAINER brainiac2k@gmail.com
 
 COPY . /app
 WORKDIR /app
 
-RUN pip install pipenv
-
-RUN pipenv install --system
+RUN pip install -r requirements.txt
 
 CMD ["python", "cox-status.py"]

@@ -1,0 +1,3 @@
+hsize==0.0.2
+requests==2.31.0
+influxdb-client==1.36.1
