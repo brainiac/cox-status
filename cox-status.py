@@ -107,7 +107,7 @@ class CoxInternetUsage:
             return False
 
         # find the login cookie to see if we're logged in
-        loggedin_cookie = self.cookie_jar.get('_cidt', None, domain='https://www.cox.com')
+        loggedin_cookie = self.cookie_jar.get('_cidt', None, domain='.cox.com')
         if loggedin_cookie is not None:
             success = True
             print('Logged in!')
